@@ -2,33 +2,45 @@
 name: Daily Cartoon Content Brief
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "30 3 * * *"
+workflow_dispatch:
+schedule:
+- cron: "30 3 * * *"
 
 permissions:
-  contents: read
+contents: read
 
 jobs:
-  generate-brief:
-    runs-on: ubuntu-latest
+generate-brief:
+runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+  - name: Set up Python
+    uses: actions/setup-python@v5
+    with:
+      python-version: "3.12"
 
-      - name: Generate daily brief
-        run: python generate.py
+  - name: Install video tools and Hindi font
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y ffmpeg fonts-noto-core
 
-      - name: Save brief as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: daily-cartoon-brief
-          path: output/daily-brief.md
-          retention-days: 7
-          
+  - name: Install Python requirements
+    run: pip install -r requirements.txt
+
+  - name: Generate daily brief
+    run: python generate.py
+
+  - name: Create cartoon MP4
+    run: python make_video.py
+
+  - name: Save brief and video as artifacts
+    uses: actions/upload-artifact@v4
+    with:
+      name: daily-cartoon-output
+      path: |
+        output/daily-brief.md
+        output/cartoon-video.mp4
+      retention-days: 7
