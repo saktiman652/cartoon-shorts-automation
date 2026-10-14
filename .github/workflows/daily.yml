@@ -1,3 +1,4 @@
+
 name: Daily Cartoon Content Brief
 
 on:
@@ -48,14 +49,14 @@ jobs:
             output/cartoon-video.mp4
           if-no-files-found: error
           retention-days: 7
-          
+
       - name: Upload video to YouTube
         env:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: |
-          python -m pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+          python -m pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib
           python - <<'PY'
           import os
           from google.oauth2.credentials import Credentials
@@ -72,7 +73,8 @@ jobs:
           )
 
           youtube = build("youtube", "v3", credentials=creds)
-          video = "output/cartoon-video.mp4"
+
+          video_path = "output/cartoon-video.mp4"
 
           request = youtube.videos().insert(
               part="snippet,status",
@@ -87,10 +89,14 @@ jobs:
                   }
               },
               media_body=MediaFileUpload(
-                  video, mimetype="video/mp4", resumable=True
+                  video_path,
+                  mimetype="video/mp4",
+                  resumable=True
               )
           )
+
           result = request.execute()
-          print("Uploaded video ID:", result["id"])
+          print("YouTube upload successful. Video ID:", result["id"])
+          print("Video link: https://www.youtube.com/watch?v=" + result["id"])
           PY
           
