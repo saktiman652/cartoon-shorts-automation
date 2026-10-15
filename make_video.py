@@ -5,7 +5,7 @@ import shutil
 import math
 
 from PIL import Image, ImageDraw, ImageFont
-
+from gtts import gTTS
 W, H = 720, 1280
 FPS = 24
 SCENE_SECONDS = 5
