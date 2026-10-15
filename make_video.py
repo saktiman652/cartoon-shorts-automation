@@ -156,4 +156,33 @@ subprocess.run([
     str(video_path),
 ], check=True)
 
-print(f"Video created: {video_path}")
+
+# Generate Hindi narration for all six scenes
+narration = " ".join(
+    f"{headline}। {caption}"
+    for headline, caption, bg in scenes
+)
+
+audio_path = OUT / "hindi-narration.mp3"
+gTTS(text=narration, lang="hi", slow=False).save(str(audio_path))
+
+# Add narration to the video
+final_path = OUT / "cartoon-video-with-voice.mp4"
+
+subprocess.run([
+    ffmpeg, "-y",
+    "-i", str(video_path),
+    "-i", str(audio_path),
+    "-map", "0:v:0",
+    "-map", "1:a:0",
+    "-c:v", "copy",
+    "-c:a", "aac",
+    "-af", "apad",
+    "-t", str(len(scenes) * SCENE_SECONDS),
+    "-movflags", "+faststart",
+    str(final_path),
+], check=True)
+
+shutil.copy2(final_path, video_path)
+print(f"Video created with Hindi voice: {video_path}")
+
