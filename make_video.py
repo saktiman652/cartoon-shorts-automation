@@ -1,188 +1,352 @@
 
-from pathlib import Path
-import subprocess
-import shutil
+import os
 import math
+import wave
+import glob
+import shutil
+import subprocess
+from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from gtts import gTTS
-W, H = 720, 1280
-FPS = 24
-SCENE_SECONDS = 5
+
+W, H = 540, 960
+FPS = 12
+DURATION = 30
 OUT = Path("output")
-SCENES = OUT / "scenes"
+FRAMES = OUT / "frames"
 
 OUT.mkdir(exist_ok=True)
-SCENES.mkdir(exist_ok=True)
+FRAMES.mkdir(exist_ok=True)
 
-# Hindi font installed by the GitHub Actions workflow
-FONT_PATHS = [
-    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
-    "/usr/share/fonts/truetype/noto/NotoSansDevanagariUI-Regular.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+STORY = [
+    ("एक दिन गोलू को एक जादुई खिलौना कार मिली।", "गोलू को मिली जादुई कार!"),
+    ("कार का बटन दबाते ही वह चमकने लगी।", "वाह! कार चमकने लगी!"),
+    ("गोलू कार लेकर अपने बगीचे में गया।", "चलो बगीचे की सैर करें!"),
+    ("रास्ते में उसे एक छोटा खरगोश मिला।", "नन्हे खरगोश से मुलाकात"),
+    ("गोलू ने खरगोश को भी अपनी कार में घुमाया।", "दोस्ती सबसे प्यारी है!"),
+    ("दोनों खुश हुए और अच्छे दोस्त बन गए।", "खुशी बाँटने से बढ़ती है!")
 ]
 
 def get_font(size):
-    for path in FONT_PATHS:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size)
+    paths = glob.glob(
+        "/usr/share/fonts/**/*Devanagari*",
+        recursive=True
+    )
+    paths += glob.glob(
+        "/usr/share/fonts/**/*NotoSans*",
+        recursive=True
+    )
+    for path in paths:
+        if path.lower().endswith((".ttf", ".otf")):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                pass
     return ImageFont.load_default()
 
-title_font = get_font(48)
-caption_font = get_font(39)
-small_font = get_font(27)
+FONT = get_font(29)
+SMALL = get_font(23)
 
-scenes = [
-    ("अरे! गोलू का खिलौना कहाँ गया?", "एक सुबह गोलू का प्यारा खिलौना गायब था!", (255, 215, 110)),
-    ("गोलू ने कमरा देखा", "उसने मेज और बिस्तर के नीचे ढूँढा।", (160, 220, 255)),
-    ("फिर भी नहीं मिला!", "गोलू थोड़ा उदास हो गया।", (255, 180, 190)),
-    ("तभी कुछ चमका!", "पर्दे के पीछे उसे एक छोटा पहिया दिखा।", (190, 240, 180)),
-    ("मिल गया खिलौना!", "खिलौना सोफे के पीछे छिपा था।", (220, 190, 255)),
-    ("गोलू खुशी से हँसा!", "सीख: किसी चीज़ को ढूँढते समय हार मत मानो।", (255, 225, 140)),
-]
+def rounded(draw, box, radius, fill, outline=None, width=1):
+    draw.rounded_rectangle(
+        box, radius=radius, fill=fill,
+        outline=outline, width=width
+    )
 
-def centered(draw, text, y, font, fill, max_width=650):
-    # Wrap text into short lines that fit the vertical video
+def make_background(scene, t):
+    img = Image.new("RGB", (W, H))
+    pix = img.load()
+
+    skies = [
+        ((65, 160, 240), (220, 245, 255)),
+        ((90, 175, 245), (245, 240, 190)),
+        ((55, 155, 225), (225, 250, 210)),
+        ((85, 175, 235), (255, 225, 190)),
+        ((65, 150, 230), (235, 240, 255)),
+        ((70, 145, 225), (255, 220, 170))
+    ]
+    top, bottom = skies[scene]
+
+    for y in range(H):
+        k = y / H
+        c = tuple(
+            int(top[i] * (1-k) + bottom[i] * k)
+            for i in range(3)
+        )
+        for x in range(W):
+            pix[x, y] = c
+
+    d = ImageDraw.Draw(img, "RGBA")
+
+    # Soft clouds
+    for cx, cy in [(90, 150), (380, 205), (280, 100)]:
+        cx = int((cx + t * 9) % (W + 100) - 40)
+        d.ellipse((cx-45, cy, cx+25, cy+35),
+                  fill=(255, 255, 255, 220))
+        d.ellipse((cx-15, cy-20, cx+45, cy+35),
+                  fill=(255, 255, 255, 235))
+        d.ellipse((cx+15, cy, cx+65, cy+35),
+                  fill=(255, 255, 255, 220))
+
+    # Sun
+    d.ellipse((410, 65, 485, 140), fill=(255, 220, 65, 255))
+    d.ellipse((422, 77, 473, 128), fill=(255, 238, 125, 255))
+
+    # Hills and ground
+    d.ellipse((-120, 500, 350, 760), fill=(100, 205, 115, 255))
+    d.ellipse((170, 485, 700, 760), fill=(65, 180, 105, 255))
+    d.rectangle((0, 670, W, H), fill=(85, 190, 100, 255))
+
+    # Small flowers
+    for x in range(35, W, 95):
+        y = 720 + (x % 3) * 22
+        d.line((x, y, x, y+24), fill=(25, 120, 55, 255), width=3)
+        d.ellipse((x-7, y-6, x+7, y+8),
+                  fill=(255, 230, 65, 255))
+
+    return img
+
+def draw_boy(d, x, y, t):
+    bob = int(math.sin(t * 5) * 5)
+    y += bob
+
+    # Ground shadow
+    d.ellipse((x-55, y+165, x+60, y+185),
+              fill=(35, 100, 55, 90))
+
+    # Legs and shoes
+    d.rounded_rectangle((x-31, y+100, x-8, y+158),
+                        radius=10, fill=(45, 75, 180))
+    d.rounded_rectangle((x+8, y+100, x+31, y+158),
+                        radius=10, fill=(45, 75, 180))
+    d.ellipse((x-43, y+145, x-5, y+168), fill=(255, 255, 255))
+    d.ellipse((x+4, y+145, x+43, y+168), fill=(245, 245, 255))
+
+    # Body with simple shading
+    d.ellipse((x-39, y+30, x+39, y+130), fill=(30, 105, 220))
+    d.ellipse((x-30, y+35, x+10, y+115), fill=(65, 150, 255))
+
+    # Moving arms
+    swing = int(math.sin(t * 5) * 12)
+    d.line((x-28, y+48, x-48, y+85+swing),
+           fill=(245, 190, 145), width=17)
+    d.line((x+28, y+48, x+49, y+82-swing),
+           fill=(245, 190, 145), width=17)
+
+    # Head and ears
+    d.ellipse((x-39, y-45, x-16, y-10), fill=(245, 190, 145))
+    d.ellipse((x+16, y-45, x+39, y-10), fill=(245, 190, 145))
+    d.ellipse((x-43, y-65, x+43, y+22), fill=(245, 190, 145))
+    d.ellipse((x-38, y-62, x+28, y+12), fill=(255, 210, 165))
+
+    # Hair
+    d.ellipse((x-43, y-75, x+35, y-32), fill=(65, 35, 25))
+    d.ellipse((x-35, y-85, x-5, y-48), fill=(75, 40, 25))
+    d.ellipse((x-8, y-83, x+24, y-48), fill=(65, 35, 25))
+
+    # Eyes and smile
+    d.ellipse((x-25, y-25, x-12, y-8), fill="white")
+    d.ellipse((x+12, y-25, x+25, y-8), fill="white")
+    d.ellipse((x-20, y-21, x-13, y-10), fill=(35, 35, 45))
+    d.ellipse((x+14, y-21, x+21, y-10), fill=(35, 35, 45))
+    d.arc((x-17, y-8, x+18, y+13), 5, 165,
+          fill=(145, 45, 40), width=3)
+
+def draw_car(d, x, y, t):
+    bounce = int(math.sin(t * 7) * 3)
+    y += bounce
+
+    # Shadow
+    d.ellipse((x-75, y+35, x+85, y+58),
+              fill=(30, 100, 45, 90))
+
+    # Car body
+    d.rounded_rectangle((x-83, y-5, x+83, y+40),
+                        radius=15, fill=(220, 35, 55))
+    d.rounded_rectangle((x-48, y-37, x+38, y+5),
+                        radius=15, fill=(245, 65, 75))
+    d.polygon([(x-36, y-30), (x-5, y-30),
+               (x-5, y-3), (x-48, y-3)],
+              fill=(150, 225, 255))
+    d.polygon([(x+2, y-30), (x+29, y-30),
+               (x+34, y-3), (x+2, y-3)],
+              fill=(170, 235, 255))
+
+    # Highlight
+    d.line((x-65, y+2, x+58, y+2),
+           fill=(255, 130, 130), width=5)
+
+    # Wheels
+    for wx in (x-48, x+48):
+        d.ellipse((wx-20, y+22, wx+20, y+62),
+                  fill=(35, 40, 55))
+        d.ellipse((wx-10, y+32, wx+10, y+52),
+                  fill=(200, 215, 225))
+        d.ellipse((wx-4, y+38, wx+4, y+46),
+                  fill=(100, 115, 130))
+
+def draw_rabbit(d, x, y):
+    d.ellipse((x-35, y-55, x-10, y+5), fill=(250, 250, 250))
+    d.ellipse((x+10, y-55, x+35, y+5), fill=(250, 250, 250))
+    d.ellipse((x-29, y-45, x-17, y-5), fill=(245, 145, 165))
+    d.ellipse((x+17, y-45, x+29, y-5), fill=(245, 145, 165))
+    d.ellipse((x-38, y-10, x+38, y+65), fill=(250, 250, 250))
+    d.ellipse((x-30, y+45, x-5, y+67), fill=(255, 255, 255))
+    d.ellipse((x+5, y+45, x+30, y+67), fill=(255, 255, 255))
+    d.ellipse((x-22, y+8, x-12, y+20), fill=(40, 40, 40))
+    d.ellipse((x+12, y+8, x+22, y+20), fill=(40, 40, 40))
+    d.ellipse((x-5, y+23, x+5, y+31), fill=(240, 130, 150))
+
+def add_caption(img, text):
+    d = ImageDraw.Draw(img, "RGBA")
+    box = (20, 795, W-20, 910)
+    rounded(d, box, 24, (15, 25, 55, 205))
+    d.rounded_rectangle((28, 803, W-28, 810),
+                        radius=3, fill=(255, 210, 55, 255))
+
+    # Center the Hindi text
+    lines = []
     words = text.split()
-    lines, line = [], ""
+    line = ""
     for word in words:
-        trial = (line + " " + word).strip()
-        if draw.textbbox((0, 0), trial, font=font)[2] <= max_width:
-            line = trial
-        else:
-            if line:
-                lines.append(line)
+        test = (line + " " + word).strip()
+        if d.textbbox((0, 0), test, font=FONT)[2] > W-65:
+            lines.append(line)
             line = word
+        else:
+            line = test
     if line:
         lines.append(line)
 
-    for item in lines:
-        box = draw.textbbox((0, 0), item, font=font, stroke_width=1)
-        x = (W - (box[2] - box[0])) // 2
-        draw.text(
-            (x, y), item, font=font, fill=fill,
-            stroke_width=1, stroke_fill=(40, 40, 60)
+    yy = 830
+    for line in lines[:2]:
+        bbox = d.textbbox((0, 0), line, font=FONT)
+        xx = (W - (bbox[2]-bbox[0])) // 2
+        d.text((xx+2, yy+3), line, font=FONT, fill=(0, 0, 0, 180))
+        d.text((xx, yy), line, font=FONT, fill=(255, 255, 255, 255))
+        yy += 38
+
+def create_frames():
+    for i in range(FPS * DURATION):
+        t = i / FPS
+        scene = min(int(t // 5), 5)
+        local_t = t - scene * 5
+
+        img = make_background(scene, local_t)
+        d = ImageDraw.Draw(img, "RGBA")
+
+        # A consistent character and toy car in every scene
+        bx = 180 + int(math.sin(local_t * 1.5) * 12)
+        draw_boy(d, bx, 525, local_t)
+
+        car_x = 350 + int(math.sin(local_t * 2) * 18)
+        draw_car(d, car_x, 650, local_t)
+
+        # The rabbit joins the story in later scenes
+        if scene >= 3:
+            draw_rabbit(d, 425, 565)
+
+        # Sparkles for a magical feel
+        if scene in (0, 1, 4):
+            for sx, sy in [(95, 400), (425, 380), (290, 470)]:
+                pulse = int(4 * math.sin(t * 5))
+                r = 7 + pulse
+                d.ellipse((sx-r, sy-r, sx+r, sy+r),
+                          fill=(255, 235, 90, 230))
+                d.line((sx-13, sy, sx+13, sy),
+                       fill=(255, 255, 210, 230), width=2)
+                d.line((sx, sy-13, sx, sy+13),
+                       fill=(255, 255, 210, 230), width=2)
+
+        add_caption(img, STORY[scene][1])
+
+        # Intro title at the top
+        rounded(d, (25, 25, W-25, 78), 18, (20, 55, 110, 175))
+        title = "गोलू और जादुई कार"
+        bbox = d.textbbox((0, 0), title, font=SMALL)
+        d.text(((W-(bbox[2]-bbox[0]))//2, 38),
+               title, font=SMALL, fill=(255, 255, 255, 255))
+
+        img.save(FRAMES / f"frame_{i:04d}.png")
+
+def create_music():
+    # Original soft synthesized background melody
+    sr = 22050
+    total = sr * DURATION
+    notes = [261.63, 329.63, 392.00, 329.63,
+             293.66, 349.23, 440.00, 349.23]
+    audio = np.zeros(total, dtype=np.float32)
+
+    for i, start in enumerate(range(0, total, sr)):
+        end = min(start + sr, total)
+        n = end - start
+        t = np.arange(n) / sr
+        freq = notes[i % len(notes)]
+        tone = (
+            0.55 * np.sin(2 * np.pi * freq * t) +
+            0.20 * np.sin(2 * np.pi * freq * 2 * t)
         )
-        y += font.size + 12
-    return y
+        fade = np.minimum(1, t * 4)
+        fade *= np.minimum(1, (n / sr - t) * 4)
+        audio[start:end] += 0.10 * tone * fade
 
-def draw_scene(index, headline, caption, bg):
-    im = Image.new("RGB", (W, H), bg)
-    d = ImageDraw.Draw(im)
+    audio = np.clip(audio, -0.8, 0.8)
+    stereo = np.column_stack((audio, audio))
+    pcm = (stereo * 32767).astype(np.int16)
 
-    # Decorative clouds
-    d.ellipse((40, 130, 190, 210), fill=(255, 255, 255))
-    d.ellipse((95, 105, 235, 205), fill=(255, 255, 255))
-    d.ellipse((510, 170, 660, 240), fill=(255, 255, 255))
+    with wave.open(str(OUT / "background-music.wav"), "wb") as f:
+        f.setnchannels(2)
+        f.setsampwidth(2)
+        f.setframerate(sr)
+        f.writeframes(pcm.tobytes())
 
-    # Floor
-    d.rectangle((0, 920, W, H), fill=(115, 195, 115))
+def main():
+    narration = " ".join(item[0] for item in STORY)
+    voice_path = OUT / "hindi-narration.mp3"
 
-    # Cartoon character: same design in every scene
-    # Head, ears, hair, eyes, smile, body and blue trousers
-    d.ellipse((260, 385, 460, 585), fill=(255, 190, 135),
-              outline=(100, 65, 55), width=5)
-    d.ellipse((244, 450, 280, 510), fill=(255, 190, 135),
-              outline=(100, 65, 55), width=4)
-    d.ellipse((440, 450, 476, 510), fill=(255, 190, 135),
-              outline=(100, 65, 55), width=4)
-    d.pieslice((255, 360, 465, 500), 180, 360,
-               fill=(80, 45, 30), outline=(80, 45, 30))
-    d.ellipse((305, 455, 330, 485), fill=(40, 40, 50))
-    d.ellipse((385, 455, 410, 485), fill=(40, 40, 50))
-    d.arc((325, 475, 390, 535), 10, 160, fill=(140, 40, 45), width=5)
+    print("Creating Hindi narration...")
+    gTTS(text=narration, lang="hi", slow=False).save(str(voice_path))
 
-    # Red shirt and blue trousers
-    d.rounded_rectangle((260, 570, 460, 800), radius=45,
-                        fill=(235, 65, 75), outline=(100, 40, 50), width=5)
-    d.rectangle((295, 770, 345, 910), fill=(50, 95, 210))
-    d.rectangle((375, 770, 425, 910), fill=(50, 95, 210))
-    d.ellipse((280, 880, 355, 930), fill=(80, 50, 35))
-    d.ellipse((365, 880, 440, 930), fill=(80, 50, 35))
+    print("Creating original background music...")
+    create_music()
 
-    # Toy car appears in the later scenes
-    if index >= 3:
-        d.rounded_rectangle((460, 790, 625, 875), radius=20,
-                            fill=(255, 205, 45),
-                            outline=(100, 70, 25), width=5)
-        d.polygon([(485, 790), (520, 740), (570, 740), (605, 790)],
-                  fill=(255, 205, 45), outline=(100, 70, 25))
-        d.ellipse((480, 850, 525, 895), fill=(45, 45, 55))
-        d.ellipse((565, 850, 610, 895), fill=(45, 45, 55))
-        d.ellipse((491, 861, 514, 884), fill=(230, 230, 230))
-        d.ellipse((576, 861, 599, 884), fill=(230, 230, 230))
+    print("Drawing cartoon animation...")
+    create_frames()
 
-    # Text panels
-    d.rounded_rectangle((25, 20, 695, 330), radius=35,
-                        fill=(255, 255, 255), outline=(70, 70, 90), width=4)
-    centered(d, headline, 55, title_font, (45, 45, 90))
-    centered(d, caption, 190, caption_font, (55, 55, 65))
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is not installed")
 
-    # Scene number
-    d.rounded_rectangle((270, 1160, 450, 1220), radius=25,
-                        fill=(255, 255, 255))
-    label = f"सीन {index + 1} / 6"
-    box = d.textbbox((0, 0), label, font=small_font)
-    d.text(((W - (box[2] - box[0])) // 2, 1175),
-           label, font=small_font, fill=(40, 60, 80))
+    output_file = OUT / "cartoon-video.mp4"
+    command = [
+        ffmpeg, "-y",
+        "-framerate", str(FPS),
+        "-i", str(FRAMES / "frame_%04d.png"),
+        "-i", str(voice_path),
+        "-i", str(OUT / "background-music.wav"),
+        "-filter_complex",
+        "[1:a]volume=1.0[voice];"
+        "[2:a]volume=0.18[music];"
+        "[voice][music]amix=inputs=2:duration=longest:"
+        "dropout_transition=2[a]",
+        "-map", "0:v",
+        "-map", "[a]",
+        "-t", str(DURATION),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-vf", "scale=720:1280",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        str(output_file)
+    ]
 
-    return im
+    print("Rendering final vertical video...")
+    subprocess.run(command, check=True)
 
-for i, (headline, caption, bg) in enumerate(scenes):
-    image = draw_scene(i, headline, caption, bg)
-    image.save(SCENES / f"scene_{i:02d}.png")
+    print(f"SUCCESS: Video saved to {output_file}")
 
-ffmpeg = shutil.which("ffmpeg")
-if not ffmpeg:
-    raise RuntimeError("FFmpeg is missing. Install it in the GitHub Actions workflow.")
-
-# Create a video from six 5-second scenes.
-concat_file = OUT / "scenes.txt"
-with concat_file.open("w", encoding="utf-8") as f:
-    for i in range(len(scenes)):
-        f.write(f"file 'scenes/scene_{i:02d}.png'\n")
-        f.write(f"duration {SCENE_SECONDS}\n")
-    # Repeat final frame so FFmpeg honors its duration
-    f.write(f"file 'scenes/scene_{len(scenes)-1:02d}.png'\n")
-
-video_path = OUT / "cartoon-video.mp4"
-subprocess.run([
-    ffmpeg, "-y",
-    "-f", "concat", "-safe", "0",
-    "-i", str(concat_file),
-    "-vf", f"fps={FPS},scale={W}:{H},format=yuv420p",
-    "-t", str(len(scenes) * SCENE_SECONDS),
-    "-movflags", "+faststart",
-    str(video_path),
-], check=True)
-
-
-# Generate Hindi narration for all six scenes
-narration = " ".join(
-    f"{headline}। {caption}"
-    for headline, caption, bg in scenes
-)
-
-audio_path = OUT / "hindi-narration.mp3"
-gTTS(text=narration, lang="hi", slow=False).save(str(audio_path))
-
-# Add narration to the video
-final_path = OUT / "cartoon-video-with-voice.mp4"
-
-subprocess.run([
-    ffmpeg, "-y",
-    "-i", str(video_path),
-    "-i", str(audio_path),
-    "-map", "0:v:0",
-    "-map", "1:a:0",
-    "-c:v", "copy",
-    "-c:a", "aac",
-    "-af", "apad",
-    "-t", str(len(scenes) * SCENE_SECONDS),
-    "-movflags", "+faststart",
-    str(final_path),
-], check=True)
-
-shutil.copy2(final_path, video_path)
-print(f"Video created with Hindi voice: {video_path}")
-
+if __name__ == "__main__":
+    main()
